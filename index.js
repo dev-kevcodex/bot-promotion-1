@@ -17,46 +17,42 @@ const firebaseConfig = {
 
 const appFb = initializeApp(firebaseConfig);
 const db = getDatabase(appFb, firebaseConfig.databaseURL);
-
 const app = express();
 let qrCodeData = '';
 
-const useFirebaseAuthState = (dbRefPath) => {
-    const writeData = async (data, key) => {
-        await set(ref(db, `${dbRefPath}/${key}`), JSON.parse(JSON.stringify(data, (k, v) => typeof v === 'bigint' ? v.toString() : v)));
-    };
-    const readData = async (key) => {
-        const snapshot = await get(ref(db, `${dbRefPath}/${key}`));
-        return snapshot.val();
-    };
+async function startBot() {
+    // Membaca Creds dari Firebase sebelum membuat socket
+    const credsSnap = await get(ref(db, 'whatsapp_session/creds'));
+    const creds = credsSnap.val() || { registrationId: Math.floor(Math.random() * 10000) };
 
-    return {
-        state: {
-            creds: (await readData('creds')) || { registrationId: Math.floor(Math.random() * 10000) },
+    const sock = makeWASocket({
+        logger: pino({ level: 'silent' }),
+        auth: {
+            creds: creds,
             keys: {
                 get: async (type, ids) => {
                     const data = {};
-                    for (const id of ids) data[id] = await readData(`${type}/${id}`);
+                    for (const id of ids) {
+                        const snap = await get(ref(db, `whatsapp_session/${type}/${id}`));
+                        data[id] = snap.val();
+                    }
                     return data;
                 },
                 set: async (data) => {
-                    for (const type in data) for (const id in data[type]) await writeData(data[type][id], `${type}/${id}`);
+                    for (const type in data) {
+                        for (const id in data[type]) {
+                            await set(ref(db, `whatsapp_session/${type}/${id}`), data[type][id]);
+                        }
+                    }
                 }
             }
         },
-        saveCreds: () => writeData(state.creds, 'creds')
-    };
-};
-
-async function startBot() {
-    const { state, saveCreds } = await useFirebaseAuthState('whatsapp_session');
-    const sock = makeWASocket({
-        logger: pino({ level: 'silent' }),
-        auth: state,
         browser: ['Flowskev Bot', 'Chrome', '1.0.0']
     });
 
-    sock.ev.on('creds.update', saveCreds);
+    sock.ev.on('creds.update', async () => {
+        await set(ref(db, 'whatsapp_session/creds'), sock.authState.creds);
+    });
 
     sock.ev.on('connection.update', async (update) => {
         const { connection, qr } = update;
@@ -75,13 +71,13 @@ async function runBroadcast(sock) {
     for (const jid of groupJids) {
         try {
             await sock.sendPresenceUpdate('composing', jid);
-            await delay(Math.floor(Math.random() * (5000 - 2000) + 2000));
+            await delay(3000); 
 
-            const textContent = `♜ Flowskev information ❪ ♢ ❫\n╰┈ⓘ Turning Complex Logic into Digital Reality.\n\n⟢━━❪ 📊 ɪɴꜰᴏ ꜱᴛᴀᴛᴜꜱ ❫━━⟣\n\n▷ 🛠 𝗗𝗲𝘃𝗲𝗹𝗼𝗽𝗺𝗲𝗻𝘁: Custom Web & Apps\n▷ 🥞 𝗛𝗼𝘀𝘁𝗶𝗻𝗴 & 𝗗𝗲𝗽𝗹𝗼𝘆: High Performance\n\n#𝗦𝗛𝗔𝗥𝗘 𝗟𝗜𝗡𝗞 𝗔𝗥𝗘𝗔:\nhttps://chat.whatsapp.com/LA4c8ai2pVW17aeXfjJ8WS?s=cl&p=a&mlu=3`;
+            const text = `♜ Flowskev information ❪ ♢ ❫\n╰┈ⓘ Turning Complex Logic into Digital Reality.\n\n⟢━━❪ 📊 ɪɴꜰᴏ ꜱᴛᴀᴛᴜꜱ ❫━━⟣\n\n▷ 🛠 𝗗𝗲𝘃𝗲𝗹𝗼𝗽𝗺𝗲𝗻𝘁: Custom Web & Apps\n▷ 🥞 𝗛𝗼𝘀𝘁𝗶𝗻𝗴 & 𝗗𝗲𝗽𝗹𝗼𝘆: High Performance\n\n#𝗦𝗛𝗔𝗥𝗘 𝗟𝗜𝗡𝗞 𝗔𝗥𝗘𝗔:\nhttps://chat.whatsapp.com/LA4c8ai2pVW17aeXfjJ8WS?s=cl&p=a&mlu=3`;
 
             const msg = generateWAMessageFromContent(jid, {
                 viewOnceMessage: { message: { interactiveMessage: {
-                    body: { text: textContent },
+                    body: { text: text },
                     header: { hasMediaAttachment: true, imageMessage: await sock.prepareMessageMedia({ url: 'https://flowskev.duckdns.org/images/grup/thumb.png' }, 'imageMessage') },
                     nativeFlowMessage: { buttons: [{ name: "cta_url", buttonParamsJson: JSON.stringify({ display_text: "𝗠𝗢𝗥𝗘 𝗜𝗡𝗙𝗢", url: "https://flowskev.duckdns.org" }) }] }
                 }}}
@@ -89,7 +85,7 @@ async function runBroadcast(sock) {
 
             await sock.relayMessage(jid, msg.message, { messageId: msg.key.id });
             console.log(`Sukses ke: ${groups[jid].subject}`);
-            await delay(Math.floor(Math.random() * (600000 - 300000) + 300000));
+            await delay(300000); // 5 menit per grup
         } catch (e) { console.log(`Gagal: ${e.message}`); }
     }
     process.exit(0);
